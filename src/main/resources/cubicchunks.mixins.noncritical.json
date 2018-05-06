@@ -1,0 +1,26 @@
+{
+    "required": false,
+    "package": "io.github.opencubicchunks.cubicchunks.core.asm.mixin.noncritical",
+    "refmap": "mixin.refmap.json",
+    "compatibilityLevel": "JAVA_8",
+    "minVersion": "0.6.15-SNAPSHOT",
+    "priority": 0,
+    "mixins": [
+        "common.command.MixinCommandTeleport",
+        "common.command.MixinCommandTP",
+        "common.command.MixinCommandBase",
+        "common.command.MixinCommandFill",
+        "common.command.MixinCommandsHeightLimits",
+        "common.MixinBlockPistonBase_HeightFix"
+    ],
+    "client": [
+        "client.MixinViewFrustum_VertViewDistance",
+        "client.MixinRenderChunk",
+        "client.MixinGuiOverlayDebug"
+    ],
+    "server": [
+    ],
+    "overwrites": {
+        "conformVisibility": true
+    }
+}

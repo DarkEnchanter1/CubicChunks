@@ -1,0 +1,27 @@
+{
+    "required": true,
+    "package": "io.github.opencubicchunks.cubicchunks.core.asm.mixin.selectable",
+    "refmap": "mixin.refmap.json",
+    "compatibilityLevel": "JAVA_8",
+    "minVersion": "0.6.15-SNAPSHOT",
+    "plugin": "io.github.opencubicchunks.cubicchunks.core.asm.CubicChunksMixinConfig",
+    "mixins": [
+        "common.MixinPathNavigate",
+        "common.MixinWalkNodeProcessor",
+        "common.MixinChunkCache",
+        "common.MixinWorld_SlowCollisionCheck",
+        "common.MixinWorld_CollisionCheck",
+        "common.MixinBlock_FastCollision",
+        "common.MixinWorldServer_UpdateBlocks"
+    ],
+    "client": [
+    ],
+    "server": [
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    },
+    "overwrites": {
+        "conformVisibility": true
+    }
+}

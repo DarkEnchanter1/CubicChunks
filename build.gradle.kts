@@ -1,7 +1,10 @@
 import com.github.jengelman.gradle.plugins.shadow.ShadowPlugin
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import me.champeau.gradle.JMHPlugin
+import me.champeau.gradle.JMHPluginExtension
+import net.minecraftforge.gradle.tasks.DeobfuscateJar
+import net.minecraftforge.gradle.user.ReobfMappingType
 import net.minecraftforge.gradle.user.ReobfTaskFactory
-import net.minecraftforge.gradle.user.TaskSingleReobf
 import net.minecraftforge.gradle.user.patcherUser.forge.ForgeExtension
 import net.minecraftforge.gradle.user.patcherUser.forge.ForgePlugin
 import nl.javadude.gradle.plugins.license.LicenseExtension
@@ -9,7 +12,9 @@ import nl.javadude.gradle.plugins.license.LicensePlugin
 import org.ajoberstar.grgit.Grgit
 import org.ajoberstar.grgit.operation.DescribeOp
 import org.gradle.api.internal.HasConvention
-import org.gradle.api.internal.artifacts.dependencies.DefaultProjectDependency
+import org.gradle.kotlin.dsl.creating
+import org.gradle.kotlin.dsl.extra
+import org.gradle.plugins.ide.idea.model.IdeaModel
 import org.spongepowered.asm.gradle.plugins.MixinExtension
 import org.spongepowered.asm.gradle.plugins.MixinGradlePlugin
 import kotlin.apply
@@ -32,23 +37,42 @@ buildscript {
     dependencies {
         classpath("org.ajoberstar:grgit:2.0.0-milestone.1")
         classpath("org.spongepowered:mixingradle:0.4-SNAPSHOT")
+        classpath("com.github.jengelman.gradle.plugins:shadow:1.2.3")
         classpath("gradle.plugin.nl.javadude.gradle.plugins:license-gradle-plugin:0.13.1")
+        classpath("me.champeau.gradle:jmh-gradle-plugin:0.3.1")
         classpath("net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT")
-        classpath("com.github.jengelman.gradle.plugins:shadow:2.0.3")
     }
 }
 
 plugins {
     base
     java
-    id("com.dorongold.task-tree") version "1.3"
+    idea
+    eclipse
+    maven
+    signing
 }
 
 apply {
     plugin<ForgePlugin>()
-    plugin<LicensePlugin>()
     plugin<ShadowPlugin>()
+    plugin<MixinGradlePlugin>()
+    plugin<LicensePlugin>()
+    plugin<JMHPlugin>()
+    //from("build.gradle.groovy")
 }
+
+// tasks
+val build by tasks
+val jar: Jar by tasks
+val shadowJar: ShadowJar by tasks
+val javadoc: Javadoc by tasks
+val test: Test by tasks
+val processResources: ProcessResources by tasks
+val deobfMcSRG: DeobfuscateJar by tasks
+val deobfMcMCP: DeobfuscateJar by tasks
+
+defaultTasks = listOf("licenseFormat", "build")
 
 //it can't be named forgeVersion because ForgeExtension has property named forgeVersion
 val theForgeVersion by project
@@ -62,17 +86,315 @@ val projectName by project
 val versionSuffix by project
 val versionMinorFreeze by project
 
-val minecraft = the<ForgeExtension>()
+val sourceSets = the<JavaPluginConvention>().sourceSets
+val mainSourceSet = sourceSets["main"]!!
 
-dependencies {
-    val compile by configurations
+version = getModVersion()
+group = "io.github.opencubicchunks"
+(mainSourceSet as ExtensionAware).extra["refMap"] = "cubicchunks.mixins.refmap.json"
 
-    childProjects.forEach { t, _ ->
-        compile(project(t))
+idea {
+    module.apply {
+        inheritOutputDirs = true
+    }
+    module.isDownloadJavadoc = true
+    module.isDownloadSources = true
+}
+
+base {
+    archivesBaseName = "CubicChunks"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+mixin {
+    token("MC_FORGE", extractForgeMinorVersion())
+}
+
+minecraft {
+    version = theForgeVersion as String
+    runDir = "run"
+    mappings = theMappingsVersion as String
+
+    isUseDepAts = true
+
+    replace("@@VERSION@@", project.version)
+    replace("\"/*@@DEPS_PLACEHOLDER@@*/", ";after:malisiscore@[$malisisCoreMinVersion,)\"")
+    replace("@@MALISIS_VERSION@@", malisisCoreMinVersion)
+    replaceIn("cubicchunks/CubicChunks.java")
+
+    val args = listOf(
+            "-Dfml.coreMods.load=cubicchunks.asm.CubicChunksCoreMod", //the core mod class, needed for mixins
+            "-Dmixin.env.compatLevel=JAVA_8", //needed to use java 8 when using mixins
+            "-Dmixin.debug.verbose=true", //verbose mixin output for easier debugging of mixins
+            "-Dmixin.debug.export=true", //export classes from mixin to runDirectory/.mixin.out
+            "-Dcubicchunks.debug=true", //various debug options of cubic chunks mod. Adds items that are not normally there!
+            "-XX:-OmitStackTraceInFastThrow", //without this sometimes you end up with exception with empty stacktrace
+            "-Dmixin.checks.interfaces=true", //check if all interface methods are overriden in mixin
+            "-Dfml.noGrab=false", //change to disable Minecraft taking control over mouse
+            "-ea", //enable assertions
+            "-da:io.netty..." //disable netty assertions because they sometimes fail
+    )
+
+    clientJvmArgs.addAll(args)
+    serverJvmArgs.addAll(args)
+}
+
+license {
+    val ext = (this as HasConvention).convention.extraProperties
+    ext["project"] = projectName
+    ext["year"] = licenseYear
+    exclude("**/*.info")
+    exclude("**/package-info.java")
+    exclude("**/*.json")
+    exclude("**/*.xml")
+    exclude("assets/*")
+    exclude("io/github/opencubicchunks/cubicchunks/core/server/chunkio/async/forge/*") // Taken from forge
+    header = file("HEADER.txt")
+    ignoreFailures = false
+    strictCheck = true
+    mapping(mapOf("java" to "SLASHSTAR_STYLE"))
+}
+
+reobf {
+    create("shadowJar").apply {
+        mappingType = ReobfMappingType.SEARGE
+    }
+}
+build.dependsOn("reobfShadowJar")
+
+jmh {
+    iterations = 10
+    benchmarkMode = listOf("thrpt")
+    batchSize = 16
+    timeOnIteration = "1000ms"
+    fork = 1
+    threads = 1
+    timeUnit = "ms"
+    verbosity = "NORMAL"
+    warmup = "1000ms"
+    warmupBatchSize = 16
+    warmupForks = 1
+    warmupIterations = 10
+    profilers = listOf("perfasm")
+    jmhVersion = "1.17.1"
+}
+
+javadoc.apply {
+    (options as StandardJavadocDocletOptions).tags = listOf("reason")
+}
+val javadocJar by tasks.creating(Jar::class) {
+    classifier = "javadoc"
+    from(tasks["javadoc"])
+}
+val sourcesJar by tasks.creating(Jar::class) {
+    classifier = "sources"
+    from(sourceSets["main"].java.srcDirs)
+}
+
+// based on:
+// https://github.com/Ordinastie/MalisisCore/blob/30d8efcfd047ac9e9bc75dfb76642bd5977f0305/build.gradle#L204-L256
+// https://github.com/gradle/kotlin-dsl/blob/201534f53d93660c273e09f768557220d33810a9/samples/maven-plugin/build.gradle.kts#L10-L44
+val uploadArchives: Upload by tasks
+uploadArchives.apply {
+    repositories {
+        withConvention(MavenRepositoryHandlerConvention::class) {
+            mavenDeployer {
+                // Sign Maven POM
+                beforeDeployment {
+                    signing.signPom(this)
+                }
+
+                val username = if (project.hasProperty("sonatypeUsername")) project.properties["sonatypeUsername"] else System.getenv("sonatypeUsername")
+                val password = if (project.hasProperty("sonatypePassword")) project.properties["sonatypePassword"] else System.getenv("sonatypePassword")
+
+                withGroovyBuilder {
+                    "snapshotRepository"("url" to "https://oss.sonatype.org/content/repositories/snapshots") {
+                        "authentication"("userName" to username, "password" to password)
+                    }
+
+                    "repository"("url" to "https://oss.sonatype.org/service/local/staging/deploy/maven2") {
+                        "authentication"("userName" to username, "password" to password)
+                    }
+                }
+
+                // Maven POM generation
+                pom.project {
+                    withGroovyBuilder {
+
+                        "name"(projectName)
+                        "artifactId"(base.archivesBaseName.toLowerCase())
+                        "packaging"("jar")
+                        "url"("https://github.com/OpenCubicChunks/CubicChunks")
+                        "description"("Unlimited world height mod for Minecraft")
+
+
+                        "scm" {
+                            "connection"("scm:git:git://github.com/OpenCubicChunks/CubicChunks.git")
+                            "developerConnection"("scm:git:ssh://git@github.com:OpenCubicChunks/CubicChunks.git")
+                            "url"("https://github.com/OpenCubicChunks/RegionLib")
+                        }
+
+                        "licenses" {
+                            "license" {
+                                "name"("The MIT License")
+                                "url"("http://www.tldrlegal.com/license/mit-license")
+                                "distribution"("repo")
+                            }
+                        }
+
+                        "developers" {
+                            "developer" {
+                                "id"("Barteks2x")
+                                "name"("Barteks2x")
+                            }
+                            // TODO: add more developers
+                        }
+
+                        "issueManagement" {
+                            "system"("github")
+                            "url"("https://github.com/OpenCubicChunks/CubicChunks/issues")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+uploadArchives.dependsOn("reobfShadowJar")
+// tasks must be before artifacts, don't change the order
+artifacts {
+    withGroovyBuilder {
+        "archives"(shadowJar, sourcesJar, javadocJar)
     }
 }
 
-version = getModVersion()
+signing {
+    isRequired = false
+    // isRequired = gradle.taskGraph.hasTask("uploadArchives")
+    sign(configurations.archives)
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    jcenter()
+    maven {
+        setUrl("https://oss.sonatype.org/content/repositories/public/")
+    }
+    maven {
+        setUrl("http://repo.spongepowered.org/maven")
+    }
+}
+
+// configurations, needed for extendsFrom
+val jmh by configurations
+val forgeGradleMc by configurations
+val forgeGradleMcDeps by configurations
+val forgeGradleGradleStart by configurations
+val compile by configurations
+val testCompile by configurations
+
+val embed by configurations.creating
+val coreShadow by configurations.creating
+
+jmh.extendsFrom(compile)
+jmh.extendsFrom(forgeGradleMc)
+jmh.extendsFrom(forgeGradleMcDeps)
+testCompile.extendsFrom(forgeGradleGradleStart)
+testCompile.extendsFrom(forgeGradleMcDeps)
+compile.extendsFrom(embed)
+compile.extendsFrom(coreShadow)
+
+// this is needed because it.ozimov:java7-hamcrest-matchers:0.7.0 depends on guava 19, while MC needs guava 21
+configurations.all { resolutionStrategy { force("com.google.guava:guava:21.0") } }
+
+dependencies {
+    val apiDep = "io.github.opencubicchunks:cubicchunks-api:1.12.2-0.0.10.0-SNAPSHOT"
+    embed("com.flowpowered:flow-noise:1.0.1-SNAPSHOT")
+    // https://mvnrepository.com/artifact/com.typesafe/config
+    embed("com.typesafe:config:1.2.0")
+    testCompile("junit:junit:4.11")
+    testCompile("org.hamcrest:hamcrest-junit:2.0.0.0")
+    testCompile("it.ozimov:java7-hamcrest-matchers:0.7.0")
+    testCompile("org.mockito:mockito-core:2.1.0-RC.2")
+    testCompile("org.spongepowered:launchwrappertestsuite:1.0-SNAPSHOT")
+
+    coreShadow("org.spongepowered:mixin:0.7.5-SNAPSHOT") {
+        isTransitive = false
+    }
+    coreShadow(apiDep)
+
+    embed("io.github.opencubicchunks:regionlib:0.51.0-SNAPSHOT")
+
+    deobfCompile("net.malisis:malisiscore:$malisisCoreVersion") {
+        isTransitive = false
+    }
+    deobfCompile(apiDep)
+}
+
+jar.apply {
+    exclude("LICENSE.txt", "log4j2.xml")
+    // TODO: https://github.com/johnrengelman/shadow/issues/355
+    //into("/") {
+    //    from(embed)
+    //}
+
+    manifest.attributes["FMLAT"] = "cubicchunks_at.cfg"
+    manifest.attributes["FMLCorePlugin"] = "cubicchunks.asm.CubicChunksCoreMod"
+    manifest.attributes["TweakClass"] = "org.spongepowered.asm.launch.MixinTweaker"
+    manifest.attributes["TweakOrder"] = "0"
+    manifest.attributes["ForceLoadAsMod"] = "true"
+    //manifest.attributes["ContainedDeps"] =
+    //        (embed.files.stream().map { x -> x.name }.reduce { x, y -> x + " " + y }).get()// + " " + coreJar.archivePath.name
+}
+
+shadowJar.apply {
+    configurations = listOf(coreShadow)
+    exclude("log4j2.xml")
+    into("/") {
+        from(embed)
+    }
+
+    classifier = "all"
+}
+
+test.apply {
+    systemProperty("lwts.tweaker", "cubicchunks.tweaker.MixinTweakerServer")
+    jvmArgs("-Dmixin.debug.verbose=true", //verbose mixin output for easier debugging of mixins
+            "-Dmixin.checks.interfaces=true", //check if all interface methods are overriden in mixin
+            "-Dmixin.env.remapRefMap=true")
+    testLogging {
+        showStandardStreams = true
+    }
+}
+
+processResources.apply {
+    // this will ensure that this task is redone when the versions change.
+    inputs.property("version", project.version)
+    inputs.property("mcversion", minecraft.version)
+
+    // replace stuff in mcmod.info, nothing else
+    from(mainSourceSet.resources.srcDirs) {
+        include("mcmod.info")
+
+        // replace version and mcversion
+        expand(mapOf("version" to project.version, "mcversion" to minecraft.version))
+    }
+
+    // copy everything else, thats not the mcmod.info
+    from(mainSourceSet.resources.srcDirs) {
+        exclude("mcmod.info")
+    }
+}
+
+val writeModVersion by tasks.creating {
+    dependsOn("build")
+    file("VERSION").writeText("VERSION=" + version)
+}
 
 fun getMcVersion(): String {
     if (minecraft.version == null) {
@@ -91,7 +413,7 @@ fun getModVersion(): String {
         val branch = getGitBranch(git)
         val snapshotSuffix = if (project.hasProperty("doRelease")) "" else "-SNAPSHOT"
         getModVersion(describe, branch) + snapshotSuffix;
-    } catch (ex: RuntimeException) {
+    } catch(ex: RuntimeException) {
         logger.error("Unknown error when accessing git repository! Are you sure the git repository exists?", ex)
         String.format("%s-%s.%s.%s%s%s", getMcVersion(), "9999", "9999", "9999", "", "NOVERSION")
     }
@@ -166,297 +488,6 @@ fun getModVersion(describe: String, branch: String): String {
 
 fun extractForgeMinorVersion(): String {
     // version format: MC_VERSION-MAJOR.MINOR.?.BUILD
-    return (theForgeVersion as String).split(Regex("-")).getOrNull(1)?.split(Regex("\\."))?.getOrNull(1)
-            ?: throw RuntimeException("Invalid forge version format: " + theForgeVersion)
-}
-
-allprojects {
-    apply {
-        plugin<ForgePlugin>()
-    }
-
-    repositories {
-        mavenLocal()
-        mavenCentral()
-        jcenter()
-        maven {
-            setUrl("https://oss.sonatype.org/content/repositories/public/")
-        }
-        maven {
-            setUrl("http://repo.spongepowered.org/maven")
-        }
-    }
-
-    configure<ForgeExtension> {
-        version = theForgeVersion as String
-        runDir = "run"
-        mappings = theMappingsVersion as String
-
-        isUseDepAts = true
-
-        replace("@@VERSION@@", project.version)
-        replace("\"/*@@DEPS_PLACEHOLDER@@*/", ";after:malisiscore@[$malisisCoreMinVersion,)\"")
-        replace("@@MALISIS_VERSION@@", malisisCoreMinVersion)
-        replaceIn("cubicchunks/CubicChunks.java")
-
-        val args = listOf(
-                // the core mod classes, needed for mixins
-                "-Dfml.coreMods.load=cubicchunks.asm.CubicChunksCoreMod,io.github.opencubicchunks.cubicchunks.core.asm.CubicGenCoreMod",
-                "-Dmixin.env.compatLevel=JAVA_8", //needed to use java 8 when using mixins
-                "-Dmixin.debug.verbose=true", //verbose mixin output for easier debugging of mixins
-                "-Dmixin.debug.export=true", //export classes from mixin to runDirectory/.mixin.out
-                "-Dcubicchunks.debug=true", //various debug options of cubic chunks mod. Adds items that are not normally there!
-                "-XX:-OmitStackTraceInFastThrow", //without this sometimes you end up with exception with empty stacktrace
-                "-Dmixin.checks.interfaces=true", //check if all interface methods are overriden in mixin
-                "-Dfml.noGrab=false", //change to disable Minecraft taking control over mouse
-                "-ea", //enable assertions
-                "-da:io.netty..." //disable netty assertions because they sometimes fail
-        )
-
-        clientJvmArgs.addAll(args)
-        serverJvmArgs.addAll(args)
-    }
-}
-
-subprojects {
-
-    plugins {
-        base
-        java
-        signing
-    }
-
-    apply {
-        plugin<MixinGradlePlugin>()
-        plugin<LicensePlugin>()
-        plugin<ShadowPlugin>()
-    }
-    val minecraft = the<ForgeExtension>()
-
-    val sourceSets = the<JavaPluginConvention>().sourceSets
-    val mainSourceSet = sourceSets["main"]!!
-
-    configure<JavaPluginConvention> {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-
-    configure<MixinExtension> {
-        token("MC_FORGE", extractForgeMinorVersion())
-    }
-
-    configure<LicenseExtension> {
-        val ext = (this as HasConvention).convention.extraProperties
-        ext["project"] = projectName
-        ext["year"] = licenseYear
-        exclude("**/*.info")
-        exclude("**/package-info.java")
-        exclude("**/*.json")
-        exclude("**/*.xml")
-        exclude("assets/*")
-        exclude("io/github/opencubicchunks/cubicchunks/core/server/chunkio/async/forge/*") // Taken from forge
-        header = file("HEADER.txt")
-        ignoreFailures = false
-        strictCheck = true
-        mapping(mapOf("java" to "SLASHSTAR_STYLE"))
-    }
-
-    val compile by configurations
-    val testCompile by configurations
-
-    // for unit test dependencies
-    val testArtifacts by configurations.creating
-    val deobfArtifacts by configurations.creating
-    deobfArtifacts.extendsFrom(compile)
-
-    // this is needed because it.ozimov:java7-hamcrest-matchers:0.7.0 depends on guava 19, while MC needs guava 21
-    configurations.all { resolutionStrategy { force("com.google.guava:guava:21.0") } }
-
-    dependencies {
-        testCompile("junit:junit:4.11")
-        testCompile("org.hamcrest:hamcrest-junit:2.0.0.0")
-        testCompile("it.ozimov:java7-hamcrest-matchers:0.7.0")
-        testCompile("org.mockito:mockito-core:2.1.0-RC.2")
-        testCompile("org.spongepowered:launchwrappertestsuite:1.0-SNAPSHOT")
-        compile("org.spongepowered:mixin:0.7.5-SNAPSHOT") {
-            isTransitive = false
-        }
-    }
-
-    tasks {
-        val jar by tasks
-        "assemble"().dependsOn("reobfJar")
-
-        "javadoc"(Javadoc::class) {
-            (options as StandardJavadocDocletOptions).tags = listOf("reason")
-        }
-
-        "signing"(Sign::class) {
-            isRequired = false
-            // isRequired = gradle.taskGraph.hasTask("uploadArchives")
-            sign(configurations.archives)
-        }
-        val javadocJar by creating(Jar::class) {
-            classifier = "javadoc"
-            from(tasks["javadoc"])
-        }
-        val sourcesJar by creating(Jar::class) {
-            classifier = "sources"
-            from(sourceSets["main"].java.srcDirs)
-        }
-        // for project dependency to work correctly
-        val deobfJar by creating(Jar::class) {
-            classifier = "deobf"
-            from(sourceSets["main"].output)
-        }
-        // tests jar used as test dependency to use by other modules
-        val testsJar by creating(Jar::class) {
-            classifier = "tests"
-            from(sourceSets["test"].output)
-        }
-
-
-        // tasks must be before artifacts, don't change the order
-        artifacts {
-            withGroovyBuilder {
-                "testArtifacts"(testsJar)
-                "deobfArtifacts"(deobfJar)
-                "archives"(jar, sourcesJar, javadocJar)
-            }
-        }
-
-        "processResources"(ProcessResources::class) {
-            // this will ensure that this task is redone when the versions change.
-            inputs.property("version", project.version)
-            inputs.property("mcversion", minecraft.version)
-
-            // replace stuff in mcmod.info, nothing else
-            from(mainSourceSet.resources.srcDirs) {
-                include("mcmod.info")
-
-                // replace version and mcversion
-                expand(mapOf("version" to project.version, "mcversion" to minecraft.version))
-            }
-
-            // copy everything else, thats not the mcmod.info
-            from(mainSourceSet.resources.srcDirs) {
-                exclude("mcmod.info")
-            }
-        }
-
-
-        val writeModVersion by creating {
-            file("VERSION").writeText("VERSION=" + version)
-        }
-        "build"().dependsOn(writeModVersion)
-    }
-}
-
-project(":cubicchunks-cubicgen") {
-    dependencies {
-        val compileOnly by configurations
-        val testCompile by configurations
-        // no runtime dependency because cubicgen never runs alone, this root project depends on both core and cubicgen and IDE runs this
-        //compileOnly(project(":cubicchunks-core", "deobfArtifacts"))
-        compileOnly(project(":cubicchunks-api", "deobfArtifacts"))
-        testCompile(project(":cubicchunks-core", "testArtifacts"))
-        testCompile(project(":cubicchunks-core", "deobfArtifacts"))
-        testCompile(project(":cubicchunks-api", "deobfArtifacts"))
-    }
-}
-
-project(":cubicchunks-core") {
-    dependencies {
-        val compileOnly by configurations
-        val testCompile by configurations
-        // no runtime dependency because cubicgen never runs alone, this root project depends on both core and cubicgen and IDE runs this
-        compileOnly(project(":cubicchunks-api", "deobfArtifacts"))
-        testCompile(project(":cubicchunks-api", "deobfArtifacts"))
-    }
-}
-
-minecraft.apply {
-    subprojects.forEach {
-        atSource(it.the<JavaPluginConvention>().sourceSets["main"])
-    }
-}
-
-val embed by configurations.creating
-val shadeEmbed by configurations.creating
-val mainJar by configurations.creating
-val shade by configurations.creating
-shade.extendsFrom(mainJar)
-
-dependencies {
-    mainJar(project(":cubicchunks-core", "coreModArtifacts"))
-    embed(project(":cubicchunks-core", "mainModArtifacts"))
-    embed(project(":cubicchunks-api"))
-    embed(project(":cubicchunks-cubicgen"))
-
-    shade(project(":cubicchunks-core", "mainModArtifacts"))
-    shade(project(":cubicchunks-api"))
-    shadeEmbed(project(":cubicchunks-cubicgen", "shadeJarAtrifact"))
-}
-
-project(":") {
-    fun Jar.setupManifest(embed: Configuration) {
-        manifest {
-            attributes["FMLAT"] = "cubicchunks_at.cfg"
-            attributes["FMLCorePlugin"] = "io.github.opencubicchunks.cubicchunks.core.asm.CubicChunksCoreMod"
-            attributes["TweakClass"] = "org.spongepowered.asm.launch.MixinTweaker"
-            attributes["TweakOrder"] = "0"
-            attributes["ForceLoadAsMod"] = "true"
-            // LazyToString is a workaround to gradle attempting to resolve the configurations now,
-            // before ForgeGradle does it's magic to make deobfCompile dependencies in subprojects work
-            attributes["ContainedDeps"] = LazyToString { embed.files.joinToString(" ") { it.name } }
-            attributes["Maven-Version"] = "${project.group}:${project.base.archivesBaseName}:${project.version}:core"
-        }
-    }
-
-    tasks {
-        // Note: this jar doesn't work yet, waiting for Mixin to make it work
-        // create another jar task so that reobfJar doesn't run twice on the same files
-        // because we include files from already reobfuscated jar from a subproject
-        val depExtJar by creating(Jar::class) {
-            dependsOn(":cubicchunks-core:reobfCoreMixinJar")
-            from(zipTree(mainJar.files.single()))
-            into("/") {
-                from(embed).exclude { it.name.toLowerCase().contains("dummy") }
-            }
-
-            setupManifest(embed)
-            classifier = "all-depext"
-        }
-        val shadeJarBase by creating(ShadowJar::class) {
-            dependsOn(
-                    ":cubicchunks-core:reobfCoreMixinJar",
-                    ":cubicchunks-core:reobfJar",
-                    ":cubicchunks-api:reobfJar"
-            )
-            exclude("META-INF/MUMFREY.*")
-            configurations = listOf(shade)
-            classifier = "shade-base"
-        }
-        // this needs to be separate from the shadeJarBase task because ShadowJar doesn't support embedding jars inside jars
-        val shadeJarDepExt by creating(Jar::class) {
-            dependsOn(shadeJarBase, ":cubicchunks-cubicgen:reobfShadeJar")
-            from(zipTree(shadeJarBase.archivePath))
-            into("/") {
-                from(shadeEmbed).exclude { it.name.toLowerCase().contains("dummy") }
-            }
-            setupManifest(shadeEmbed)
-            classifier = "shade-all"
-        }
-        "assemble"().dependsOn(depExtJar, shadeJarDepExt)
-        // and make the original jar as empty as possible, we won't use it
-        "jar"(Jar::class) {
-            exclude("*")
-            archiveName = "dummyOutput.jar"
-        }
-    }
-}
-class LazyToString(val obj: () -> Any) {
-    override fun toString(): String {
-        return obj().toString()
-    }
+    return (theForgeVersion as String).split(Regex("-")).getOrNull(1)?.split(Regex("\\."))?.getOrNull(1) ?:
+    throw RuntimeException("Invalid forge version format: " + theForgeVersion)
 }

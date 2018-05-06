@@ -1,0 +1,45 @@
+{
+    "required": true,
+    "package": "io.github.opencubicchunks.cubicchunks.core.asm.mixin.core",
+    "refmap": "mixin.refmap.json",
+    "compatibilityLevel": "JAVA_8",
+    "minVersion": "0.6.15-SNAPSHOT",
+    "mixins": [
+        "common.MixinChunk_Column",
+        "common.MixinChunk_Cubes",
+        "common.MixinIBlockAccess_MinMaxHeight",
+        "common.MixinMinecraftServer",
+        "common.MixinWorld_Tick",
+        "common.MixinWorld",
+        "common.MixinWorldServer",
+        "common.MixinWorld_HeightLimits",
+        "common.MixinChunkCache_HeightLimits",
+        "common.MixinEntity_DeathFix",
+        "common.MixinWorldProvider",
+        "common.MixinPlayerList",
+        "common.MixinWorldInfo",
+        "common.MixinWorldSettings",
+        "common.MixinDerivedWorldInfo"
+    ],
+    "client": [
+        "client.MixinWorld_HeightLimits",
+        "client.MixinWorldClient",
+        "client.MixinRenderGlobal",
+        "client.MixinChunkCache_HeightLimits",
+        "client.MixinChunk_Cubes",
+        "client.MixinViewFrustum_RenderHeightFix",
+        "client.MixinWorldProvider",
+        "client.MixinGuiCreateWorld",
+        "client.MixinDebugRenderChunkBorder"
+    ],
+    "server": [
+        "server.MixinDedicatedServer_HeightLimits",
+        "server.MixinDedicatedPlayerList"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    },
+    "overwrites": {
+        "conformVisibility": true
+    }
+}
