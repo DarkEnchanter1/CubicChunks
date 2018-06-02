@@ -773,13 +773,9 @@ public abstract class MixinChunk_Cubes implements IColumn {
 
     @Inject(method = "setStorageArrays", at = @At(value = "HEAD"))
     private void setStorageArrays_CubicChunks_NotSupported(ExtendedBlockStorage[] newStorageArrays, CallbackInfo cbi) {
-        if(false)if (isColumn) {
+        if (isColumn) {
             throw new UnsupportedOperationException("setting storage arrays it not supported with cubic chunks");
         }
-        for (ExtendedBlockStorage ebs : newStorageArrays) {
-            ((Cube)getCube(ebs.getYLocation() >> 4)).setStorage(ebs);
-        }
-        this.storageArrays = newStorageArrays;
     }
 
     // ==============================================

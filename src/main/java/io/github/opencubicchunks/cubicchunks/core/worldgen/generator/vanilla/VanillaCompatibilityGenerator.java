@@ -37,6 +37,7 @@ import mcp.MethodsReturnNonnullByDefault;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.EnumCreatureType;
 import net.minecraft.init.Blocks;
+import net.minecraft.util.ReportedException;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraft.world.biome.Biome;
@@ -256,6 +257,9 @@ public class VanillaCompatibilityGenerator implements ICubeGenerator {
     @Override
     public void populate(ICube cube) {
         tryInit(vanilla, world);
+        if (cube.getY() < 0 || cube.getY() >= worldHeightCubes) {
+            return;
+        }
         // Cubes outside this range are only filled with their respective block
         // No population takes place
         if (cube.getY() >= 0 && cube.getY() < worldHeightCubes) {
@@ -264,7 +268,18 @@ public class VanillaCompatibilityGenerator implements ICubeGenerator {
                 ((ICubicWorldInternal) world).getCubeFromCubeCoords(cube.getX(), y, cube.getZ()).setPopulated(true);
             }
 
-            vanilla.populate(cube.getX(), cube.getZ());
+            try {
+                vanilla.populate(cube.getX(), cube.getZ());
+            } catch (IllegalArgumentException ex) {
+                StackTraceElement[] stack = ex.getStackTrace();
+                if (stack == null || stack.length < 1 ||
+                        !stack[0].getClassName().equals(Random.class.getName()) ||
+                        !stack[0].getMethodName().equals("nextInt")) {
+                    throw ex;
+                } else {
+                    CubicChunks.LOGGER.error("Error while populating. Likely known mod issue, ignoring...", ex);
+                }
+            }
             if (CubicChunks.Config.BoolOptions.USE_VANILLA_CHUNK_WORLD_GENERATORS.getValue()) {
                 GameRegistry.generateWorld(cube.getX(), cube.getZ(), (World) world, vanilla, ((World) world).getChunkProvider());
             }
