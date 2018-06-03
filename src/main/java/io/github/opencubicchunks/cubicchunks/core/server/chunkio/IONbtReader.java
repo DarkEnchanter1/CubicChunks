@@ -88,6 +88,10 @@ public class IONbtReader {
 
         // read the rest of the column properties
         column.setInhabitedTime(nbt.getLong("InhabitedTime"));
+
+        if (column.getCapabilities() != null && nbt.hasKey("ForgeCaps")) {
+            column.getCapabilities().deserializeNBT(nbt.getCompoundTag("ForgeCaps"));
+        }
         return column;
     }
 

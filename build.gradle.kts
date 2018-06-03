@@ -313,7 +313,7 @@ compile.extendsFrom(coreShadow)
 configurations.all { resolutionStrategy { force("com.google.guava:guava:21.0") } }
 
 dependencies {
-    val apiDep = "io.github.opencubicchunks:cubicchunks-api:1.12.2-0.0.10.0-SNAPSHOT"
+    val apiDep = "io.github.opencubicchunks:cubicchunks-api:1.12.2-0.0.11.0-SNAPSHOT"
     embed("com.flowpowered:flow-noise:1.0.1-SNAPSHOT")
     // https://mvnrepository.com/artifact/com.typesafe/config
     embed("com.typesafe:config:1.2.0")
@@ -348,6 +348,7 @@ jar.apply {
     manifest.attributes["TweakClass"] = "org.spongepowered.asm.launch.MixinTweaker"
     manifest.attributes["TweakOrder"] = "0"
     manifest.attributes["ForceLoadAsMod"] = "true"
+    manifest.attributes["FMLCorePluginContainsFMLMod"] = "true" // workaround for mixin double-loading the mod on new forge versions
     //manifest.attributes["ContainedDeps"] =
     //        (embed.files.stream().map { x -> x.name }.reduce { x, y -> x + " " + y }).get()// + " " + coreJar.archivePath.name
 }
